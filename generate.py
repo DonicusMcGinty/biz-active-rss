@@ -26,9 +26,18 @@ def fetch_biz_threads():
     return threads
 
 def fetch_reddit(subreddit):
-    headers = {"User-Agent": "microcap-scanner"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MicrocapScanner/1.0)"
+    }
     url = f"https://www.reddit.com/r/{subreddit}/new.json?limit=100"
-    return requests.get(url, headers=headers).json()
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return None
+        return response.json()
+    except:
+        return None
 
 def extract_tickers(text):
     if not text:
@@ -105,8 +114,10 @@ def generate_microcap_feed():
 
     # --- reddit ---
     for sub in ["pennystocks", "wallstreetbets"]:
-        reddit = fetch_reddit(sub)
-        for post in reddit["data"]["children"]:
+    reddit = fetch_reddit(sub)
+    if not reddit:
+        continue
+    for post in reddit["data"]["children"]:
             text = post["data"]["title"]
             for t in extract_tickers(text):
                 mentions[t] = mentions.get(t, 0) + 1
