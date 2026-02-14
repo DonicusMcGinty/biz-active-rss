@@ -113,14 +113,12 @@ def generate_microcap_feed():
             mentions[t] = mentions.get(t, 0) + 1
 
     # --- reddit ---
-    for sub in ["pennystocks", "wallstreetbets"]:
-    reddit = fetch_reddit(sub)
-    if not reddit:
-        continue
-    for post in reddit["data"]["children"]:
-            text = post["data"]["title"]
-            for t in extract_tickers(text):
-                mentions[t] = mentions.get(t, 0) + 1
+        for sub in [...]
+        reddit = ...
+        if not reddit:
+            continue
+        for post in ...
+            ...
 
     previous = load_history()
     accelerating = {}
