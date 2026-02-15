@@ -5,6 +5,10 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
+concurrency:
+  group: update-rss
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -24,11 +28,13 @@ jobs:
         with:
           python-version: "3.x"
 
-      - run: pip install requests
+      - name: Install deps
+        run: pip install requests
 
-      - run: python generate.py
+      - name: Generate feeds
+        run: python generate.py
 
-      - name: Commit feeds
+      - name: Commit and push feeds
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
@@ -38,7 +44,8 @@ jobs:
             feed-alpha-asymmetric.xml \
             feed-prebreakout.xml \
             feed-top-opportunities.xml \
-            mention_history.json
+            mention_history.json \
+            thread_velocity.json
 
           git commit -m "Update feeds" || echo "No changes"
 
