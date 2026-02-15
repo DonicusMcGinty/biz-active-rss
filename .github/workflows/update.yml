@@ -40,6 +40,7 @@ jobs:
             feed-biz.xml \
             feed-biz-fast.xml \
             feed-biz-tickers.xml \
+            feed-biz-alpha.xml \
             feed-microcap.xml \
             microcap_history.json
 
