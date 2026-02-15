@@ -1,55 +1,47 @@
-# === ONLY SHOWING CHANGED / NEW CONSTANTS + FUNCTIONS ===
-# Replace your existing file with this whole version
-
 import requests
 import re
-import json
 import math
 import os
 import html
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+import json
 
 ET.register_namespace("content", "http://purl.org/rss/1.0/modules/content/")
 
 FMP_API_KEY = os.getenv("FMP_API_KEY")
-BOARD = "biz"
 
+# ===== Feeds =====
 FEED_ASYM = "feed-alpha-asymmetric.xml"
+FEED_PRE = "feed-prebreakout.xml"
 
+# ===== Market cap window =====
+MIN_CAP = 10_000_000
+MAX_CAP = 250_000_000
+
+# ===== Files =====
+HISTORY_FILE = "mention_history.json"
+
+# ===== Regex =====
 TICKER_REGEX = r"\b[A-Z]{2,5}\b"
-
-# --- NEW: nano-cap window ---
-ASYM_MIN_CAP = 5_000_000
-ASYM_MAX_CAP = 25_000_000
-
-LAST_REPLIES = 30
-THREAD_LIMIT = 12
 
 VALID_EXCHANGES = {"NASDAQ", "NYSE", "AMEX"}
 REQUIRE_OPTIONABLE = True
 
-TICKER_BLACKLIST = {
-    "USD","USDT","USDC","CEO","CFO","SEC","FED","FOMC",
-    "NYSE","NASDAQ","ETF","IPO","AI","DD","IMO","LOL",
-    "YOLO","FOMO","HODL","ATH","TLDR"
+BLACKLIST = {
+    "USD","USDT","USDC","CEO","CFO","SEC","FED",
+    "NYSE","NASDAQ","ETF","IPO","AI","DD","IMO",
+    "LOL","YOLO","FOMO","HODL","ATH","TLDR"
 }
 
-# ----------------------------
-# Utilities
-# ----------------------------
+# -----------------------------------------------------
 
-def now_ts():
+def now():
     return int(datetime.now(timezone.utc).timestamp())
 
-def rfc822(ts):
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
-
-def strip_html(s):
-    if not s: return ""
-    s = s.replace("<br>", "\n")
-    s = re.sub(r"<[^>]+>", "", s)
-    return html.unescape(s).strip()
+def rfc(ts):
+    return datetime.fromtimestamp(ts, tz=timezone.utc)\
+        .strftime("%a, %d %b %Y %H:%M:%S %z")
 
 def fetch_json(url):
     try:
@@ -60,17 +52,15 @@ def fetch_json(url):
         pass
     return None
 
-def extract_tickers(text):
+def extract(text):
     return re.findall(TICKER_REGEX, text or "")
 
-def plausible_ticker(tk):
-    if tk in TICKER_BLACKLIST:
-        return False
-    return 2 <= len(tk) <= 5
+def ok_ticker(t):
+    return 2 <= len(t) <= 5 and t not in BLACKLIST
 
-# ----------------------------
-# Stock validation
-# ----------------------------
+# -----------------------------------------------------
+# STOCK VALIDATION
+# -----------------------------------------------------
 
 def fmp_profile(tk):
     if not FMP_API_KEY:
@@ -80,16 +70,17 @@ def fmp_profile(tk):
     )
 
 def yahoo_optionable(tk):
-    data = fetch_json(f"https://query2.finance.yahoo.com/v7/finance/options/{tk}")
+    data = fetch_json(
+        f"https://query2.finance.yahoo.com/v7/finance/options/{tk}"
+    )
     res = (data or {}).get("optionChain", {}).get("result")
-    if not res:
-        return False
-    return bool(res[0].get("expirationDates"))
+    return bool(res and res[0].get("expirationDates"))
 
-def validate_nano_stock(tk):
+def validate_stock(tk):
     prof = fmp_profile(tk)
     if not prof:
         return None
+
     p = prof[0]
 
     exch = p.get("exchangeShortName")
@@ -97,7 +88,7 @@ def validate_nano_stock(tk):
         return None
 
     cap = p.get("mktCap")
-    if not cap or cap < ASYM_MIN_CAP or cap > ASYM_MAX_CAP:
+    if not cap or cap < MIN_CAP or cap > MAX_CAP:
         return None
 
     if REQUIRE_OPTIONABLE and not yahoo_optionable(tk):
@@ -110,116 +101,175 @@ def validate_nano_stock(tk):
         "desc": (p.get("description") or "")[:240]
     }
 
-# ----------------------------
-# Gather mentions from /biz/
-# ----------------------------
+# -----------------------------------------------------
+# MENTIONS
+# -----------------------------------------------------
 
 def gather_mentions():
-    catalog = fetch_json(f"https://a.4cdn.org/{BOARD}/catalog.json")
-    mentions = {}
+    catalog = fetch_json("https://a.4cdn.org/biz/catalog.json")
+    counts = {}
 
     if not catalog:
-        return mentions
+        return counts
 
     for page in catalog:
         for t in page.get("threads", []):
             text = (t.get("sub","") or "") + " " + (t.get("com","") or "")
-            for tk in extract_tickers(text):
-                if plausible_ticker(tk):
-                    mentions[tk] = mentions.get(tk, 0) + 1
+            for tk in extract(text):
+                if ok_ticker(tk):
+                    counts[tk] = counts.get(tk, 0) + 1
 
-    return mentions, catalog
+    return counts
 
-# ----------------------------
-# Build asymmetric feed
-# ----------------------------
+# -----------------------------------------------------
+# HISTORY
+# -----------------------------------------------------
 
-def generate_asymmetric():
-    mentions, catalog = gather_mentions()
+def load_history():
+    if not os.path.exists(HISTORY_FILE):
+        return {}
+    try:
+        return json.load(open(HISTORY_FILE))
+    except:
+        return {}
 
+def save_history(data):
+    json.dump(data, open(HISTORY_FILE,"w"))
+
+# -----------------------------------------------------
+# RSS
+# -----------------------------------------------------
+
+def write_rss(title, items, file):
+    rss = ET.Element("rss", version="2.0")
+    ch = ET.SubElement(rss, "channel")
+
+    ET.SubElement(ch, "title").text = title
+    ET.SubElement(ch, "link").text = "https://boards.4chan.org/biz/"
+    ET.SubElement(ch, "description").text = title
+    ET.SubElement(ch, "lastBuildDate").text = rfc(now())
+
+    for it in items:
+        item = ET.SubElement(ch, "item")
+        ET.SubElement(item, "title").text = it["title"]
+        ET.SubElement(item, "link").text = it["link"]
+        ET.SubElement(item, "guid").text = it["guid"]
+        ET.SubElement(item, "pubDate").text = it["date"]
+        ET.SubElement(item, "description").text = "Open"
+
+        c = ET.SubElement(
+            item,
+            "{http://purl.org/rss/1.0/modules/content/}encoded"
+        )
+        c.text = it["body"]
+
+    ET.ElementTree(rss).write(file, encoding="utf-8", xml_declaration=True)
+
+# -----------------------------------------------------
+# ASYMMETRIC FEED
+# -----------------------------------------------------
+
+def gen_asymmetric(curr):
     rows = []
 
-    for tk, count in mentions.items():
-        info = validate_nano_stock(tk)
+    for tk, count in curr.items():
+        info = validate_stock(tk)
         if not info:
             continue
 
         cap = info["cap"]
-
-        # Simple asymmetry score
-        score = count * (25_000_000 / cap)
+        score = count * (MAX_CAP / cap)
 
         rows.append((score, tk, info, count))
 
     rows.sort(reverse=True)
 
-    n = now_ts()
+    n = now()
     items = []
 
-    for score, tk, info, count in rows[:25]:
-        cap_str = f"${info['cap']:,}"
-
-        why = f"nano cap {cap_str} • mentions {count} • score {score:.2f}"
+    for sc, tk, info, c in rows[:25]:
+        cap = f"${info['cap']:,}"
+        why = f"small cap {cap} • mentions {c} • score {sc:.2f}"
 
         body = (
             f"<h2>${tk} — {html.escape(info['name'])}</h2>"
-            f"<p><b>Why it’s asymmetric:</b> {html.escape(why)}</p>"
+            f"<p><b>Why it’s asymmetric:</b> {why}</p>"
             f"<p>{html.escape(info['desc'])}</p>"
-            f"<p><a href='https://finance.yahoo.com/quote/{tk}'>Open</a></p>"
         )
 
         items.append({
             "title": f"{tk} — WHY: {why}",
             "link": f"https://finance.yahoo.com/quote/{tk}",
-            "guid": f"asym-nano-{tk}-{n}",
-            "pubDate": rfc822(n),
-            "description": "Open for details",
-            "content_html": body,
+            "guid": f"{tk}-asym-{n}",
+            "date": rfc(n),
+            "body": body
         })
 
-    write_rss(
-        "Nano-cap Asymmetric Plays ($5M–$25M)",
-        "https://boards.4chan.org/biz/",
-        "Nano-cap asymmetric plays from /biz/ mentions",
-        items,
-        FEED_ASYM
-    )
+    write_rss("Asymmetric Plays (10–250M)", items, FEED_ASYM)
 
-# ----------------------------
-# RSS writer
-# ----------------------------
+# -----------------------------------------------------
+# PRE-BREAKOUT FEED
+# -----------------------------------------------------
 
-def write_rss(title, link, desc, items, filename):
-    rss = ET.Element("rss", version="2.0")
-    channel = ET.SubElement(rss, "channel")
+def gen_prebreakout(curr, prev):
+    rows = []
 
-    ET.SubElement(channel, "title").text = title
-    ET.SubElement(channel, "link").text = link
-    ET.SubElement(channel, "description").text = desc
-    ET.SubElement(channel, "lastBuildDate").text = rfc822(now_ts())
+    for tk, c in curr.items():
+        p = prev.get(tk, 0)
 
-    for it in items:
-        item = ET.SubElement(channel, "item")
-        ET.SubElement(item, "title").text = it["title"]
-        ET.SubElement(item, "link").text = it["link"]
-        ET.SubElement(item, "guid").text = it["guid"]
-        ET.SubElement(item, "pubDate").text = it["pubDate"]
-        ET.SubElement(item, "description").text = it["description"]
+        if c < 2 or c > 15:
+            continue  # ignore zero & already popular
 
-        content = ET.SubElement(
-            item,
-            "{http://purl.org/rss/1.0/modules/content/}encoded"
+        delta = c - p
+        if delta <= 0:
+            continue
+
+        info = validate_stock(tk)
+        if not info:
+            continue
+
+        cap = info["cap"]
+
+        # early momentum score
+        score = delta * (MAX_CAP / cap) / math.log(c + 1)
+
+        rows.append((score, tk, info, c, delta))
+
+    rows.sort(reverse=True)
+
+    n = now()
+    items = []
+
+    for sc, tk, info, c, d in rows[:20]:
+        cap = f"${info['cap']:,}"
+        why = f"mentions {c} (+{d}) • cap {cap} • early momentum"
+
+        body = (
+            f"<h2>${tk} — {html.escape(info['name'])}</h2>"
+            f"<p><b>Pre-breakout signal:</b> {why}</p>"
+            f"<p>{html.escape(info['desc'])}</p>"
         )
-        content.text = it["content_html"]
 
-    ET.ElementTree(rss).write(filename, encoding="utf-8", xml_declaration=True)
+        items.append({
+            "title": f"{tk} — PRE-BREAKOUT — {why}",
+            "link": f"https://finance.yahoo.com/quote/{tk}",
+            "guid": f"{tk}-pre-{n}",
+            "date": rfc(n),
+            "body": body
+        })
 
-# ----------------------------
-# Main
-# ----------------------------
+    write_rss("Pre-Breakout Detector (10–250M)", items, FEED_PRE)
+
+# -----------------------------------------------------
 
 def main():
-    generate_asymmetric()
+    curr = gather_mentions()
+    prev = load_history()
+
+    gen_asymmetric(curr)
+    gen_prebreakout(curr, prev)
+
+    save_history(curr)
 
 if __name__ == "__main__":
     main()
