@@ -5,10 +5,6 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
-concurrency:
-  group: update-rss
-  cancel-in-progress: true
-
 permissions:
   contents: write
 
@@ -20,42 +16,26 @@ jobs:
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - name: Install dependencies
-        run: pip install requests
+      - run: pip install requests
 
-      - name: Generate feeds
-        run: python generate.py
+      - run: python generate.py
 
-      - name: Commit and push updated feeds
+      - name: Commit feeds
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
-          git add \
-            feed-biz.xml \
-            feed-biz-fast.xml \
-            feed-biz-tickers.xml \
-            feed-biz-alpha.xml \
-            feed-microcap.xml \
-            feed-alpha-dashboard.xml \
-            feed-alpha-elite.xml \
-            feed-alpha-asymmetric.xml \
-            feed-crypto-degen.xml \
-            microcap_history.json \
-            elite_history.json \
-            coingecko_cache.json
+          git add feed-alpha-asymmetric.xml
 
-          git commit -m "Update RSS feeds" || echo "No changes"
+          git commit -m "Update asymmetric feed" || echo "No changes"
 
           git pull --rebase origin main
           git push origin main
