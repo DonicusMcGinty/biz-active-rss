@@ -49,6 +49,8 @@ jobs:
             feed-microcap.xml \
             feed-alpha-dashboard.xml \
             feed-alpha-elite.xml \
+            feed-alpha-asymmetric.xml \
+            feed-crypto-100x.xml \
             microcap_history.json \
             elite_history.json \
             coingecko_cache.json
