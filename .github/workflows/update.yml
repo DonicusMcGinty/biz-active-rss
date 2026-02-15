@@ -33,9 +33,12 @@ jobs:
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
-          git add feed-alpha-asymmetric.xml
+          git add \
+            feed-alpha-asymmetric.xml \
+            feed-prebreakout.xml \
+            mention_history.json
 
-          git commit -m "Update asymmetric feed" || echo "No changes"
+          git commit -m "Update feeds" || echo "No changes"
 
           git pull --rebase origin main
           git push origin main
