@@ -84,13 +84,19 @@ def write_rss(title, link, desc, items, filename):
 
     for it in items:
         item = ET.SubElement(channel, "item")
+
         ET.SubElement(item, "title").text = it["title"]
         ET.SubElement(item, "link").text = it["link"]
         ET.SubElement(item, "guid").text = it["guid"]
         ET.SubElement(item, "pubDate").text = it["pubDate"]
-        ET.SubElement(item, "description").text = it["description"]
 
-        content = ET.SubElement(item, "{http://purl.org/rss/1.0/modules/content/}encoded")
+        # Minimal description forces Reeder to show full content
+        ET.SubElement(item, "description").text = "Open article for full thread"
+
+        content = ET.SubElement(
+            item,
+            "{http://purl.org/rss/1.0/modules/content/}encoded"
+        )
         content.text = it["content"]
 
         if it.get("image"):
@@ -108,6 +114,7 @@ def write_rss(title, link, desc, items, filename):
 
 def build_thread_item(t, posts, prefix=""):
     now = int(datetime.now(timezone.utc).timestamp())
+
     no = t["no"]
     url = f"https://boards.4chan.org/{BOARD}/thread/{no}"
     subject = strip_html(t.get("sub")) or f"Thread {no}"
@@ -118,19 +125,23 @@ def build_thread_item(t, posts, prefix=""):
 
     reply_posts = posts[1:]
     reply_posts = reply_posts[-LAST_REPLIES:]
-    reply_posts.reverse()
+    reply_posts.reverse()  # newest first
 
     body = []
+
     body.append("<h2>" + html.escape(prefix + subject) + "</h2>")
     body.append("<p><a href='" + url + "'>Open thread</a> • Replies: " + str(replies) + "</p>")
+
     body.append("<hr><h3>OP</h3>")
     body.append("<p>" + html.escape(op_text).replace("\n", "<br>") + "</p>")
+
     body.append("<hr><h3>Latest replies</h3>")
 
     for p in reply_posts:
         txt = strip_html(p.get("com"))
         if not txt:
             continue
+
         body.append(
             "<p><b>" + str(p.get("no")) + "</b><br>" +
             html.escape(txt).replace("\n", "<br>") +
@@ -146,14 +157,13 @@ def build_thread_item(t, posts, prefix=""):
         "link": url,
         "guid": url,
         "pubDate": rfc822(created),
-        "description": op_text[:280],
         "content": "".join(body),
         "image": image,
     }
 
 
 # ----------------------------
-# Active feed
+# Feed 1 — Active
 # ----------------------------
 
 def generate_biz_feed():
@@ -162,10 +172,12 @@ def generate_biz_feed():
         return
 
     now = int(datetime.now(timezone.utc).timestamp())
+
     threads = [t for page in catalog for t in page["threads"]]
     threads.sort(key=lambda x: thread_velocity(x, now), reverse=True)
 
     items = []
+
     for t in threads[:THREAD_LIMIT]:
         posts = fetch_thread(t["no"])
         if posts:
@@ -181,7 +193,7 @@ def generate_biz_feed():
 
 
 # ----------------------------
-# FAST feed
+# Feed 2 — FAST
 # ----------------------------
 
 def generate_biz_fast_feed():
@@ -190,13 +202,16 @@ def generate_biz_fast_feed():
         return
 
     now = int(datetime.now(timezone.utc).timestamp())
+
     threads = [t for page in catalog for t in page["threads"]]
     threads.sort(key=lambda x: thread_velocity(x, now), reverse=True)
 
     items = []
+
     for t in threads[:THREAD_LIMIT]:
         if t.get("replies", 0) < 25:
             continue
+
         posts = fetch_thread(t["no"])
         if posts:
             vel = thread_velocity(t, now)
@@ -213,7 +228,7 @@ def generate_biz_fast_feed():
 
 
 # ----------------------------
-# Ticker feed
+# Feed 3 — Ticker threads
 # ----------------------------
 
 def generate_biz_ticker_feed():
@@ -224,9 +239,11 @@ def generate_biz_ticker_feed():
     threads = [t for page in catalog for t in page["threads"]]
 
     items = []
+
     for t in threads:
         text = (t.get("sub", "") or "") + " " + (t.get("com", "") or "")
         tks = extract_tickers(text)
+
         if not tks:
             continue
 
@@ -248,7 +265,7 @@ def generate_biz_ticker_feed():
 
 
 # ----------------------------
-# Microcap feed (unchanged)
+# Microcap feed
 # ----------------------------
 
 def load_history():
@@ -312,10 +329,12 @@ def generate_microcap_feed():
     save_history(mentions)
 
     validated = []
+
     for tk, count in accel.items():
         info = validate_ticker(tk)
         if not info:
             continue
+
         score = count / math.log(info["mktCap"])
         validated.append((score, tk, info))
 
@@ -330,7 +349,6 @@ def generate_microcap_feed():
             "link": f"https://finance.yahoo.com/quote/{tk}",
             "guid": tk,
             "pubDate": rfc822(now),
-            "description": f"{info['name']} • ${info['mktCap']:,}",
             "content": info["description"],
             "image": None,
         })
