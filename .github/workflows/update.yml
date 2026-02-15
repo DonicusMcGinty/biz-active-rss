@@ -1,35 +1,3 @@
-name: Update RSS
-
-on:
-  schedule:
-    - cron: "*/15 * * * *"
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    env:
-      FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Generate feeds
-        run: python generate.py
-
       - name: Commit and push updated feeds
         run: |
           git config user.name "github-actions"
@@ -48,4 +16,7 @@ jobs:
             coingecko_cache.json
 
           git commit -m "Update RSS feeds" || echo "No changes"
-          git push
+
+          # If main moved since checkout, rebase our commit on top of it, then push
+          git pull --rebase origin main
+          git push origin main
