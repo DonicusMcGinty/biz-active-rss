@@ -42,6 +42,7 @@ jobs:
             feed-biz-tickers.xml \
             feed-biz-alpha.xml \
             feed-microcap.xml \
+            feed-alpha-dashboard.xml \
             microcap_history.json
 
           git commit -m "Update RSS feeds" || echo "No changes"
