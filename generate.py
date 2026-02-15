@@ -131,8 +131,18 @@ def build_rss(items, filename, title):
 
     ET.ElementTree(rss).write(filename, encoding="utf-8", xml_declaration=True)
 
+def fetch_thread_posts(thread_no: int):
+    url = f"https://a.4cdn.org/{BOARD}/thread/{thread_no}.json"
+    r = requests.get(url, timeout=10)
+    if r.status_code != 200:
+        return None
+    return r.json().get("posts", [])
 
 def generate_biz_feed():
+    from datetime import datetime, timezone
+
+    REPLIES_TO_INCLUDE = 50  # change to e.g. 200 if you want more (heavier)
+
     pages = fetch_biz_catalog()
     threads = []
     now = int(datetime.now(tz=timezone.utc).timestamp())
@@ -140,75 +150,71 @@ def generate_biz_feed():
     for page in pages:
         threads.extend(page["threads"])
 
-    # rank by "active": replies per hour since last bump (rough)
     def activity_score(t):
         replies = t.get("replies", 0)
         last = t.get("last_modified", t.get("time", now))
-        hours = max((now - last) / 3600.0, 0.25)  # floor to avoid insane spikes
+        hours = max((now - last) / 3600.0, 0.25)
         return replies / hours
 
-    sorted_threads = sorted(threads, key=activity_score, reverse=True)[:25]
+    sorted_threads = sorted(threads, key=activity_score, reverse=True)[:15]  # keep smaller; we now fetch threads
 
     rss = ET.Element("rss", version="2.0")
     channel = ET.SubElement(rss, "channel")
-
-    ET.SubElement(channel, "title").text = "/biz/ Active Threads (with snippets)"
+    ET.SubElement(channel, "title").text = "/biz/ Active Threads (inline replies)"
     ET.SubElement(channel, "link").text = f"https://boards.4chan.org/{BOARD}/"
-    ET.SubElement(channel, "description").text = "Ranked by rough reply velocity; includes OP snippet + thumbs."
+    ET.SubElement(channel, "description").text = "Active threads with OP + recent replies embedded."
 
     for t in sorted_threads:
         thread_no = t["no"]
         thread_url = f"https://boards.4chan.org/{BOARD}/thread/{thread_no}"
 
-        sub = strip_html(t.get("sub", "")) or "No subject"
-        op_text = strip_html(t.get("com", ""))
-
+        sub = strip_html(t.get("sub", "")) or f"Thread {thread_no}"
         replies = t.get("replies", 0)
-        images = t.get("images", 0)
-
         created = t.get("time", now)
-        last_bump = t.get("last_modified", created)
 
-        # Flags / metrics
-        is_new = (now - created) <= 3600
-        hours_since_bump = max((now - last_bump) / 3600.0, 0.25)
-        rph = replies / hours_since_bump
+        posts = fetch_thread_posts(thread_no)
+        if not posts:
+            continue
 
-        # Thumb / image
-        thumb_html = ""
-        if "tim" in t and "ext" in t:
-            thumb = biz_thumb_url(t["tim"])
-            full_img = biz_image_url(t["tim"], t["ext"])
-            thumb_html = f'<p><a href="{full_img}"><img src="{thumb}" alt="thumb"></a></p>'
+        # Build inline transcript: OP + last N replies (excluding OP)
+        op = posts[0]
+        op_text = strip_html(op.get("com", ""))
 
-        # Build description (HTML tends to render fine in Reader)
-        snippet = op_text[:500] + ("…" if len(op_text) > 500 else "")
-        flags = []
-        if is_new:
-            flags.append("NEW")
-        flags_txt = ("[" + " • ".join(flags) + "] ") if flags else ""
+        reply_posts = posts[1:]
+        if REPLIES_TO_INCLUDE and len(reply_posts) > REPLIES_TO_INCLUDE:
+            reply_posts = reply_posts[-REPLIES_TO_INCLUDE:]
+
+        chunks = []
+        chunks.append(f"<p><b>OP:</b><br>{html.escape(op_text).replace('\\n','<br>')}</p>")
+
+        for p in reply_posts:
+            com = strip_html(p.get("com", ""))
+            if not com:
+                continue
+            # short header: post number
+            no = p.get("no")
+            chunks.append(f"<p><b>{no}:</b><br>{html.escape(com).replace('\\n','<br>')}</p>")
 
         desc = (
-            f"{thumb_html}"
-            f"<p><b>{flags_txt}{sub}</b></p>"
-            f"<p>Replies: {replies} | Images: {images} | ~{rph:.1f} replies/hr</p>"
-            f"<p>{html.escape(snippet).replace('\\n', '<br>')}</p>"
+            f"<p><b>{html.escape(sub)}</b></p>"
+            f"<p>Replies: {replies}</p>"
+            + "".join(chunks)
         )
 
         item = ET.SubElement(channel, "item")
-        ET.SubElement(item, "title").text = f"{flags_txt}{sub} — {replies} replies"
+        ET.SubElement(item, "title").text = f"{sub} — {replies} replies"
         ET.SubElement(item, "link").text = thread_url
         ET.SubElement(item, "guid").text = thread_url
         ET.SubElement(item, "pubDate").text = rfc822_from_epoch(created)
         ET.SubElement(item, "description").text = desc
-                # Add enclosure for Reeder (so it shows an image preview)
+
+        # Reeder-friendly image preview
         if "tim" in t and "ext" in t:
             thumb = biz_thumb_url(t["tim"])
             enclosure = ET.SubElement(item, "enclosure")
             enclosure.set("url", thumb)
             enclosure.set("type", "image/jpeg")
             enclosure.set("length", "0")
-
 
     ET.ElementTree(rss).write("feed-biz.xml", encoding="utf-8", xml_declaration=True)
 
