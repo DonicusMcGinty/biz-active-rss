@@ -135,35 +135,74 @@ def build_rss(items, filename, title):
 def generate_biz_feed():
     pages = fetch_biz_catalog()
     threads = []
+    now = int(datetime.now(tz=timezone.utc).timestamp())
 
     for page in pages:
         threads.extend(page["threads"])
 
-    sorted_threads = sorted(
-        threads,
-        key=lambda x: x.get("replies", 0),
-        reverse=True
-    )[:20]
+    # rank by "active": replies per hour since last bump (rough)
+    def activity_score(t):
+        replies = t.get("replies", 0)
+        last = t.get("last_modified", t.get("time", now))
+        hours = max((now - last) / 3600.0, 0.25)  # floor to avoid insane spikes
+        return replies / hours
+
+    sorted_threads = sorted(threads, key=activity_score, reverse=True)[:25]
 
     rss = ET.Element("rss", version="2.0")
     channel = ET.SubElement(rss, "channel")
 
-    ET.SubElement(channel, "title").text = "/biz/ Active Threads"
-    ET.SubElement(channel, "link").text = "https://boards.4chan.org/biz/"
-    ET.SubElement(channel, "description").text = "Top active threads"
+    ET.SubElement(channel, "title").text = "/biz/ Active Threads (with snippets)"
+    ET.SubElement(channel, "link").text = f"https://boards.4chan.org/{BOARD}/"
+    ET.SubElement(channel, "description").text = "Ranked by rough reply velocity; includes OP snippet + thumbs."
 
     for t in sorted_threads:
-        thread_url = f"https://boards.4chan.org/biz/thread/{t['no']}"
+        thread_no = t["no"]
+        thread_url = f"https://boards.4chan.org/{BOARD}/thread/{thread_no}"
+
+        sub = strip_html(t.get("sub", "")) or "No subject"
+        op_text = strip_html(t.get("com", ""))
+
+        replies = t.get("replies", 0)
+        images = t.get("images", 0)
+
+        created = t.get("time", now)
+        last_bump = t.get("last_modified", created)
+
+        # Flags / metrics
+        is_new = (now - created) <= 3600
+        hours_since_bump = max((now - last_bump) / 3600.0, 0.25)
+        rph = replies / hours_since_bump
+
+        # Thumb / image
+        thumb_html = ""
+        if "tim" in t and "ext" in t:
+            thumb = biz_thumb_url(t["tim"])
+            full_img = biz_image_url(t["tim"], t["ext"])
+            thumb_html = f'<p><a href="{full_img}"><img src="{thumb}" alt="thumb"></a></p>'
+
+        # Build description (HTML tends to render fine in Reader)
+        snippet = op_text[:500] + ("…" if len(op_text) > 500 else "")
+        flags = []
+        if is_new:
+            flags.append("NEW")
+        flags_txt = ("[" + " • ".join(flags) + "] ") if flags else ""
+
+        desc = (
+            f"{thumb_html}"
+            f"<p><b>{flags_txt}{sub}</b></p>"
+            f"<p>Replies: {replies} | Images: {images} | ~{rph:.1f} replies/hr</p>"
+            f"<p>{html.escape(snippet).replace('\\n', '<br>')}</p>"
+        )
 
         item = ET.SubElement(channel, "item")
-
-        ET.SubElement(item, "title").text = f"Thread {t['no']} — {t.get('replies', 0)} replies"
+        ET.SubElement(item, "title").text = f"{flags_txt}{sub} — {replies} replies"
         ET.SubElement(item, "link").text = thread_url
         ET.SubElement(item, "guid").text = thread_url
-        ET.SubElement(item, "description").text = t.get("sub", "")
+        ET.SubElement(item, "pubDate").text = rfc822_from_epoch(created)
+        ET.SubElement(item, "description").text = desc
 
     ET.ElementTree(rss).write("feed-biz.xml", encoding="utf-8", xml_declaration=True)
-
 
 
 def generate_microcap_feed():
