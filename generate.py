@@ -113,7 +113,7 @@ def generate_microcap_feed():
             mentions[t] = mentions.get(t, 0) + 1
 
     # --- reddit ---
-        for sub in [...]
+        for sub in ["pennystocks", "wallstreetbets"]:
         reddit = ...
         if not reddit:
             continue
