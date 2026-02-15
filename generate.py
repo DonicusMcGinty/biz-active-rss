@@ -127,12 +127,17 @@ def generate_biz_feed():
     ET.SubElement(channel, "description").text = "Top active threads"
 
     for t in sorted_threads:
+        thread_url = f"https://boards.4chan.org/biz/thread/{t['no']}"
+
         item = ET.SubElement(channel, "item")
+
         ET.SubElement(item, "title").text = f"Thread {t['no']} — {t.get('replies', 0)} replies"
-        ET.SubElement(item, "guid").text = str(t["no"])
+        ET.SubElement(item, "link").text = thread_url
+        ET.SubElement(item, "guid").text = thread_url
         ET.SubElement(item, "description").text = t.get("sub", "")
 
     ET.ElementTree(rss).write("feed-biz.xml", encoding="utf-8", xml_declaration=True)
+
 
 
 def generate_microcap_feed():
