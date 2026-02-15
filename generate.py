@@ -17,6 +17,7 @@ HISTORY_FILE = "microcap_history.json"
 MAX_MARKET_CAP = 2_500_000_000
 TOP_COUNT = 12
 VALID_EXCHANGES = {"NASDAQ", "NYSE", "AMEX"}
+
 TICKER_REGEX = r"\b[A-Z]{2,5}\b"
 
 THREAD_LIMIT = 12
@@ -58,6 +59,10 @@ def fetch_thread(no):
     return data.get("posts", []) if data else None
 
 
+def extract_tickers(text):
+    return re.findall(TICKER_REGEX, text or "")
+
+
 def thread_velocity(t, now):
     replies = t.get("replies", 0)
     last = t.get("last_modified", t.get("time", now))
@@ -66,7 +71,7 @@ def thread_velocity(t, now):
 
 
 # ----------------------------
-# RSS builder
+# RSS writer
 # ----------------------------
 
 def write_rss(title, link, desc, items, filename):
@@ -101,7 +106,7 @@ def write_rss(title, link, desc, items, filename):
 # Build inline thread item
 # ----------------------------
 
-def build_thread_item(t, posts, subject_prefix=""):
+def build_thread_item(t, posts, prefix=""):
     now = int(datetime.now(timezone.utc).timestamp())
     no = t["no"]
     url = f"https://boards.4chan.org/{BOARD}/thread/{no}"
@@ -116,7 +121,7 @@ def build_thread_item(t, posts, subject_prefix=""):
     reply_posts.reverse()
 
     body = []
-    body.append("<h2>" + html.escape(subject_prefix + subject) + "</h2>")
+    body.append("<h2>" + html.escape(prefix + subject) + "</h2>")
     body.append("<p><a href='" + url + "'>Open thread</a> • Replies: " + str(replies) + "</p>")
     body.append("<hr><h3>OP</h3>")
     body.append("<p>" + html.escape(op_text).replace("\n", "<br>") + "</p>")
@@ -126,16 +131,18 @@ def build_thread_item(t, posts, subject_prefix=""):
         txt = strip_html(p.get("com"))
         if not txt:
             continue
-        body.append("<p><b>" + str(p.get("no")) + "</b><br>" +
-                    html.escape(txt).replace("\n", "<br>") +
-                    "</p><hr>")
+        body.append(
+            "<p><b>" + str(p.get("no")) + "</b><br>" +
+            html.escape(txt).replace("\n", "<br>") +
+            "</p><hr>"
+        )
 
     image = None
     if "tim" in t:
         image = f"https://i.4cdn.org/{BOARD}/{t['tim']}s.jpg"
 
     return {
-        "title": subject_prefix + subject + " — " + str(replies) + " replies",
+        "title": prefix + subject + " — " + str(replies) + " replies",
         "link": url,
         "guid": url,
         "pubDate": rfc822(created),
@@ -146,7 +153,7 @@ def build_thread_item(t, posts, subject_prefix=""):
 
 
 # ----------------------------
-# Feed 1 — Active
+# Active feed
 # ----------------------------
 
 def generate_biz_feed():
@@ -174,7 +181,7 @@ def generate_biz_feed():
 
 
 # ----------------------------
-# Feed 2 — FAST threads
+# FAST feed
 # ----------------------------
 
 def generate_biz_fast_feed():
@@ -184,7 +191,6 @@ def generate_biz_fast_feed():
 
     now = int(datetime.now(timezone.utc).timestamp())
     threads = [t for page in catalog for t in page["threads"]]
-
     threads.sort(key=lambda x: thread_velocity(x, now), reverse=True)
 
     items = []
@@ -207,7 +213,7 @@ def generate_biz_fast_feed():
 
 
 # ----------------------------
-# Feed 3 — Ticker threads
+# Ticker feed
 # ----------------------------
 
 def generate_biz_ticker_feed():
@@ -215,7 +221,6 @@ def generate_biz_ticker_feed():
     if not catalog:
         return
 
-    now = int(datetime.now(timezone.utc).timestamp())
     threads = [t for page in catalog for t in page["threads"]]
 
     items = []
@@ -246,6 +251,51 @@ def generate_biz_ticker_feed():
 # Microcap feed (unchanged)
 # ----------------------------
 
+def load_history():
+    if not os.path.exists(HISTORY_FILE):
+        return {}
+    with open(HISTORY_FILE) as f:
+        return json.load(f)
+
+
+def save_history(data):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(data, f)
+
+
+def validate_ticker(ticker):
+    try:
+        prof = fetch_json(
+            f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={FMP_API_KEY}"
+        )
+        if not prof:
+            return None
+
+        p = prof[0]
+        if p.get("exchangeShortName") not in VALID_EXCHANGES:
+            return None
+
+        cap = p.get("mktCap")
+        if not cap or cap > MAX_MARKET_CAP:
+            return None
+
+        opt = fetch_json(
+            f"https://query2.finance.yahoo.com/v7/finance/options/{ticker}"
+        )
+        result = (opt or {}).get("optionChain", {}).get("result")
+        if not result or not result[0].get("expirationDates"):
+            return None
+
+        return {
+            "ticker": ticker,
+            "name": p.get("companyName"),
+            "mktCap": cap,
+            "description": (p.get("description") or "")[:240],
+        }
+    except:
+        return None
+
+
 def generate_microcap_feed():
     mentions = {}
 
@@ -267,14 +317,14 @@ def generate_microcap_feed():
         if not info:
             continue
         score = count / math.log(info["mktCap"])
-        validated.append((score, tk, info, count))
+        validated.append((score, tk, info))
 
     validated.sort(reverse=True)
 
     now = int(datetime.now(timezone.utc).timestamp())
     items = []
 
-    for score, tk, info, count in validated[:TOP_COUNT]:
+    for score, tk, info in validated[:TOP_COUNT]:
         items.append({
             "title": f"{tk} — Score {score:.2f}",
             "link": f"https://finance.yahoo.com/quote/{tk}",
