@@ -2,6 +2,7 @@ name: Update RSS
 
 on:
   schedule:
+    # Runs every 15 minutes
     - cron: "*/15 * * * *"
   workflow_dispatch:
 
@@ -11,26 +12,36 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     env:
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - name: Install deps
+      - name: Install dependencies
         run: pip install requests
 
       - name: Generate feeds
         run: python generate.py
 
-      - name: Commit outputs
+      - name: Commit and push updated feeds
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add feed-biz.xml feed-microcap.xml microcap_history.json
-          git commit -m "Update feeds" || echo "No changes"
+
+          git add \
+            feed-biz.xml \
+            feed-biz-fast.xml \
+            feed-biz-tickers.xml \
+            feed-microcap.xml \
+            microcap_history.json
+
+          git commit -m "Update RSS feeds" || echo "No changes"
           git push
