@@ -5,6 +5,32 @@ import math
 import os
 import xml.etree.ElementTree as ET
 
+from datetime import datetime, timezone
+import html
+
+def strip_html(s: str) -> str:
+    if not s:
+        return ""
+    # 4chan uses <br> for newlines
+    s = s.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    # remove tags
+    s = re.sub(r"<[^>]+>", "", s)
+    # unescape entities
+    s = html.unescape(s)
+    # tidy whitespace
+    s = re.sub(r"\n{3,}", "\n\n", s).strip()
+    return s
+
+def rfc822_from_epoch(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
+
+def biz_thumb_url(tim: int) -> str:
+    # 4chan thumbnails are served as JPG and end with 's.jpg'
+    return f"https://i.4cdn.org/{BOARD}/{tim}s.jpg"
+
+def biz_image_url(tim: int, ext: str) -> str:
+    return f"https://i.4cdn.org/{BOARD}/{tim}{ext}"
+
 FMP_API_KEY = os.getenv("FMP_API_KEY")
 BOARD = "biz"
 
