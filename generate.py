@@ -59,6 +59,11 @@ def fetch_thread(no):
     return data.get("posts", []) if data else None
 
 
+def fetch_reddit(sub):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    return fetch_json(f"https://www.reddit.com/r/{sub}/new.json?limit=50", headers=headers)
+
+
 def extract_tickers(text):
     return re.findall(TICKER_REGEX, text or "")
 
@@ -90,8 +95,8 @@ def write_rss(title, link, desc, items, filename):
         ET.SubElement(item, "guid").text = it["guid"]
         ET.SubElement(item, "pubDate").text = it["pubDate"]
 
-        # Minimal description forces Reeder to show full content
-        ET.SubElement(item, "description").text = "Open article for full thread"
+        # Force Reeder to use full content
+        ET.SubElement(item, "description").text = "Open article for full content"
 
         content = ET.SubElement(
             item,
@@ -125,15 +130,15 @@ def build_thread_item(t, posts, prefix=""):
 
     reply_posts = posts[1:]
     reply_posts = reply_posts[-LAST_REPLIES:]
-    reply_posts.reverse()  # newest first
+    reply_posts.reverse()
 
     body = []
 
-    body.append("<h2>" + html.escape(prefix + subject) + "</h2>")
-    body.append("<p><a href='" + url + "'>Open thread</a> • Replies: " + str(replies) + "</p>")
+    body.append(f"<h2>{html.escape(prefix + subject)}</h2>")
+    body.append(f"<p><a href='{url}'>Open thread</a> • Replies: {replies}</p>")
 
     body.append("<hr><h3>OP</h3>")
-    body.append("<p>" + html.escape(op_text).replace("\n", "<br>") + "</p>")
+    body.append(f"<p>{html.escape(op_text).replace(chr(10), '<br>')}</p>")
 
     body.append("<hr><h3>Latest replies</h3>")
 
@@ -141,11 +146,9 @@ def build_thread_item(t, posts, prefix=""):
         txt = strip_html(p.get("com"))
         if not txt:
             continue
-
         body.append(
-            "<p><b>" + str(p.get("no")) + "</b><br>" +
-            html.escape(txt).replace("\n", "<br>") +
-            "</p><hr>"
+            f"<p><b>{p.get('no')}</b><br>"
+            f"{html.escape(txt).replace(chr(10), '<br>')}</p><hr>"
         )
 
     image = None
@@ -153,7 +156,7 @@ def build_thread_item(t, posts, prefix=""):
         image = f"https://i.4cdn.org/{BOARD}/{t['tim']}s.jpg"
 
     return {
-        "title": prefix + subject + " — " + str(replies) + " replies",
+        "title": prefix + subject + f" — {replies} replies",
         "link": url,
         "guid": url,
         "pubDate": rfc822(created),
@@ -163,7 +166,7 @@ def build_thread_item(t, posts, prefix=""):
 
 
 # ----------------------------
-# Feed 1 — Active
+# /biz/ feeds
 # ----------------------------
 
 def generate_biz_feed():
@@ -172,29 +175,21 @@ def generate_biz_feed():
         return
 
     now = int(datetime.now(timezone.utc).timestamp())
-
-    threads = [t for page in catalog for t in page["threads"]]
+    threads = [t for p in catalog for t in p["threads"]]
     threads.sort(key=lambda x: thread_velocity(x, now), reverse=True)
 
     items = []
-
     for t in threads[:THREAD_LIMIT]:
         posts = fetch_thread(t["no"])
         if posts:
             items.append(build_thread_item(t, posts))
 
-    write_rss(
-        "/biz/ Active Threads",
-        f"https://boards.4chan.org/{BOARD}/",
-        "Active threads with inline replies",
-        items,
-        "feed-biz.xml",
-    )
+    write_rss("/biz/ Active Threads",
+              f"https://boards.4chan.org/{BOARD}/",
+              "Active threads with replies",
+              items,
+              "feed-biz.xml")
 
-
-# ----------------------------
-# Feed 2 — FAST
-# ----------------------------
 
 def generate_biz_fast_feed():
     catalog = fetch_catalog()
@@ -202,48 +197,36 @@ def generate_biz_fast_feed():
         return
 
     now = int(datetime.now(timezone.utc).timestamp())
-
-    threads = [t for page in catalog for t in page["threads"]]
+    threads = [t for p in catalog for t in p["threads"]]
     threads.sort(key=lambda x: thread_velocity(x, now), reverse=True)
 
     items = []
-
     for t in threads[:THREAD_LIMIT]:
         if t.get("replies", 0) < 25:
             continue
-
         posts = fetch_thread(t["no"])
         if posts:
             vel = thread_velocity(t, now)
-            prefix = "[FAST " + format(vel, ".1f") + "/hr] "
-            items.append(build_thread_item(t, posts, prefix))
+            items.append(build_thread_item(t, posts, f"[FAST {vel:.1f}/hr] "))
 
-    write_rss(
-        "/biz/ FAST Threads",
-        f"https://boards.4chan.org/{BOARD}/",
-        "Threads gaining replies rapidly",
-        items,
-        "feed-biz-fast.xml",
-    )
+    write_rss("/biz/ FAST Threads",
+              f"https://boards.4chan.org/{BOARD}/",
+              "Rapidly moving threads",
+              items,
+              "feed-biz-fast.xml")
 
-
-# ----------------------------
-# Feed 3 — Ticker threads
-# ----------------------------
 
 def generate_biz_ticker_feed():
     catalog = fetch_catalog()
     if not catalog:
         return
 
-    threads = [t for page in catalog for t in page["threads"]]
+    threads = [t for p in catalog for t in p["threads"]]
 
     items = []
-
     for t in threads:
         text = (t.get("sub", "") or "") + " " + (t.get("com", "") or "")
         tks = extract_tickers(text)
-
         if not tks:
             continue
 
@@ -255,13 +238,53 @@ def generate_biz_ticker_feed():
         if len(items) >= THREAD_LIMIT:
             break
 
-    write_rss(
-        "/biz/ Ticker Threads",
-        f"https://boards.4chan.org/{BOARD}/",
-        "Threads mentioning stock tickers",
-        items,
-        "feed-biz-tickers.xml",
-    )
+    write_rss("/biz/ Ticker Threads",
+              f"https://boards.4chan.org/{BOARD}/",
+              "Threads mentioning tickers",
+              items,
+              "feed-biz-tickers.xml")
+
+
+def generate_biz_alpha_feed():
+    catalog = fetch_catalog()
+    if not catalog:
+        return
+
+    now = int(datetime.now(timezone.utc).timestamp())
+    threads = [t for p in catalog for t in p["threads"]]
+
+    candidates = []
+
+    for t in threads:
+        replies = t.get("replies", 0)
+        last = t.get("last_modified", t.get("time", now))
+        hours = max((now - last) / 3600, 0.25)
+        velocity = replies / hours
+
+        if replies < 40 or velocity < 8 or (now - last) > 7200:
+            continue
+
+        text = (t.get("sub", "") or "") + " " + (t.get("com", "") or "")
+        tickers = extract_tickers(text)
+        if not tickers:
+            continue
+
+        score = velocity * math.log(replies + 1) * len(set(tickers))
+        candidates.append((score, velocity, len(set(tickers)), t))
+
+    candidates.sort(reverse=True)
+
+    items = []
+    for score, vel, tc, t in candidates[:THREAD_LIMIT]:
+        posts = fetch_thread(t["no"])
+        if posts:
+            items.append(build_thread_item(t, posts, f"[ALPHA v={vel:.1f}/hr t={tc}] "))
+
+    write_rss("/biz/ HIGH-SIGNAL",
+              f"https://boards.4chan.org/{BOARD}/",
+              "High-signal threads",
+              items,
+              "feed-biz-alpha.xml")
 
 
 # ----------------------------
@@ -296,13 +319,6 @@ def validate_ticker(ticker):
         if not cap or cap > MAX_MARKET_CAP:
             return None
 
-        opt = fetch_json(
-            f"https://query2.finance.yahoo.com/v7/finance/options/{ticker}"
-        )
-        result = (opt or {}).get("optionChain", {}).get("result")
-        if not result or not result[0].get("expirationDates"):
-            return None
-
         return {
             "ticker": ticker,
             "name": p.get("companyName"),
@@ -314,29 +330,28 @@ def validate_ticker(ticker):
 
 
 def generate_microcap_feed():
+    catalog = fetch_catalog()
+    if not catalog:
+        return
+
     mentions = {}
 
-    catalog = fetch_catalog()
-    if catalog:
-        for page in catalog:
-            for t in page["threads"]:
-                text = (t.get("sub", "") or "") + " " + (t.get("com", "") or "")
-                for tk in extract_tickers(text):
-                    mentions[tk] = mentions.get(tk, 0) + 1
+    for page in catalog:
+        for t in page["threads"]:
+            text = (t.get("sub", "") or "") + " " + (t.get("com", "") or "")
+            for tk in extract_tickers(text):
+                mentions[tk] = mentions.get(tk, 0) + 1
 
     prev = load_history()
     accel = {k: v for k, v in mentions.items() if prev.get(k, 0) < v}
     save_history(mentions)
 
     validated = []
-
     for tk, count in accel.items():
         info = validate_ticker(tk)
-        if not info:
-            continue
-
-        score = count / math.log(info["mktCap"])
-        validated.append((score, tk, info))
+        if info:
+            score = count / math.log(info["mktCap"])
+            validated.append((score, tk, info))
 
     validated.sort(reverse=True)
 
@@ -344,29 +359,96 @@ def generate_microcap_feed():
     items = []
 
     for score, tk, info in validated[:TOP_COUNT]:
+        body = (
+            f"<h2>${tk}</h2>"
+            f"<p><b>{info['name']}</b></p>"
+            f"<p>Market Cap: ${info['mktCap']:,}</p>"
+            f"<p>{html.escape(info['description'])}</p>"
+        )
+
         items.append({
-            "title": f"{tk} — Score {score:.2f}",
+            "title": f"[MICROCAP] {tk}",
             "link": f"https://finance.yahoo.com/quote/{tk}",
             "guid": tk,
             "pubDate": rfc822(now),
-            "content": info["description"],
+            "content": body,
             "image": None,
         })
 
-    write_rss(
-        "Microcap Equities Alpha",
-        "https://finance.yahoo.com",
-        "Accelerating microcap mentions",
-        items,
-        "feed-microcap.xml",
-    )
+    write_rss("Microcap Acceleration",
+              "https://finance.yahoo.com",
+              "Accelerating microcap mentions",
+              items,
+              "feed-microcap.xml")
 
+
+# ----------------------------
+# MASTER ALPHA DASHBOARD
+# ----------------------------
+
+def generate_alpha_dashboard_feed():
+    now = int(datetime.now(timezone.utc).timestamp())
+    items = []
+
+    # Pull from HIGH-SIGNAL /biz/
+    catalog = fetch_catalog()
+    if catalog:
+        threads = [t for p in catalog for t in p["threads"]]
+        threads.sort(key=lambda x: thread_velocity(x, now), reverse=True)
+
+        for t in threads[:6]:
+            posts = fetch_thread(t["no"])
+            if posts:
+                items.append(build_thread_item(t, posts, "[BIZ] "))
+
+    # Microcap acceleration
+    prev = load_history()
+    for tk in list(prev.keys())[:4]:
+        items.append({
+            "title": f"[MICROCAP] {tk}",
+            "link": f"https://finance.yahoo.com/quote/{tk}",
+            "guid": tk + "-dash",
+            "pubDate": rfc822(now),
+            "content": f"<p>Accelerating mentions for ${tk}</p>",
+            "image": None,
+        })
+
+    # Reddit spikes
+    for sub in ["pennystocks", "wallstreetbets"]:
+        data = fetch_reddit(sub)
+        if not data:
+            continue
+        for post in data["data"]["children"][:2]:
+            d = post["data"]
+            url = "https://reddit.com" + d["permalink"]
+
+            items.append({
+                "title": f"[REDDIT] {d['title']}",
+                "link": url,
+                "guid": url,
+                "pubDate": rfc822(now),
+                "content": f"<p>Score: {d['score']} | Comments: {d['num_comments']}</p>",
+                "image": None,
+            })
+
+    write_rss("Alpha Dashboard",
+              f"https://boards.4chan.org/{BOARD}/",
+              "Combined high-signal chatter",
+              items,
+              "feed-alpha-dashboard.xml")
+
+
+# ----------------------------
+# Main
+# ----------------------------
 
 def main():
     generate_biz_feed()
     generate_biz_fast_feed()
     generate_biz_ticker_feed()
+    generate_biz_alpha_feed()
     generate_microcap_feed()
+    generate_alpha_dashboard_feed()
 
 
 if __name__ == "__main__":
