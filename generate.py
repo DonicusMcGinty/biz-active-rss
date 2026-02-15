@@ -201,6 +201,14 @@ def generate_biz_feed():
         ET.SubElement(item, "guid").text = thread_url
         ET.SubElement(item, "pubDate").text = rfc822_from_epoch(created)
         ET.SubElement(item, "description").text = desc
+                # Add enclosure for Reeder (so it shows an image preview)
+        if "tim" in t and "ext" in t:
+            thumb = biz_thumb_url(t["tim"])
+            enclosure = ET.SubElement(item, "enclosure")
+            enclosure.set("url", thumb)
+            enclosure.set("type", "image/jpeg")
+            enclosure.set("length", "0")
+
 
     ET.ElementTree(rss).write("feed-biz.xml", encoding="utf-8", xml_declaration=True)
 
