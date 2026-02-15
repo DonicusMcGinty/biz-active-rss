@@ -5,6 +5,8 @@ import math
 import os
 import xml.etree.ElementTree as ET
 
+ET.register_namespace("content", "http://purl.org/rss/1.0/modules/content/")
+
 from datetime import datetime, timezone
 import html
 
@@ -207,6 +209,11 @@ def generate_biz_feed():
         ET.SubElement(item, "guid").text = thread_url
         ET.SubElement(item, "pubDate").text = rfc822_from_epoch(created)
         ET.SubElement(item, "description").text = desc
+
+        full_html = desc  # or a longer version if you want
+        content_encoded = ET.SubElement(item, "{http://purl.org/rss/1.0/modules/content/}encoded")
+        content_encoded.text = f"<![CDATA[{full_html}]]>"
+
 
         # Reeder-friendly image preview
         if "tim" in t and "ext" in t:
