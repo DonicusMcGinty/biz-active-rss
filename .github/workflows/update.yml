@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -23,13 +24,13 @@ jobs:
       - name: Install deps
         run: pip install requests
 
-      - name: Generate feed
+      - name: Generate feeds
         run: python generate.py
 
-      - name: Commit and push
+      - name: Commit outputs
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add feed.xml
-          git commit -m "Update feed" || echo "No changes"
+          git add feed-biz.xml feed-microcap.xml microcap_history.json
+          git commit -m "Update feeds" || echo "No changes"
           git push
