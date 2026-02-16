@@ -26,7 +26,7 @@ FEED_TOP    = "feed-top-opportunities.xml"
 MENTION_HISTORY_FILE = "mention_history.json"
 THREAD_VEL_FILE = "thread_velocity.json"
 
-# Stocks universe
+# Stocks universe (as per your latest)
 MIN_CAP = 50_000_000
 MAX_CAP = 2_500_000_000
 VALID_EXCHANGES = {"NASDAQ", "NYSE", "AMEX"}
@@ -36,7 +36,18 @@ ACTIVE_THREADS_LIMIT = 15
 FIRST_REPLIES = 3
 LAST_REPLIES = 30
 
-# Mentions / tickers
+# “No-title” OP snippet title settings
+MAX_OP_TITLE_CHARS = 120  # short enough for Reeder; UI will still truncate
+MIN_OP_TITLE_CHARS = 40   # if OP is shorter, fine
+
+# Exclusions for Active feed DISPLAY (subject OR OP snippet)
+EXCLUDE_TITLE_KEYWORDS = [
+    "general",   # original
+    "gme",       # new
+    "bbbyq",     # new
+]
+
+# Mentions / tickers (for stock feeds)
 TICKER_REGEX = r"\b[A-Z]{2,5}\b"
 BLACKLIST = {
     "USD","USDT","USDC","CEO","CFO","SEC","FED","FOMC",
@@ -47,11 +58,9 @@ BLACKLIST = {
 # Opportunity feed compute limits (avoid too many API calls)
 MAX_TICKERS_TO_VALIDATE = 80
 
-# Exploding detector sensitivity
-# We boost if velocity increased meaningfully vs last run.
-EXPLODE_ABS_DELTA = 6.0     # +6 replies/hr
-EXPLODE_MULT = 1.6          # 1.6x increase
-
+# Exploding detector sensitivity (used for ordering only; no longer shown in title tags)
+EXPLODE_ABS_DELTA = 6.0
+EXPLODE_MULT = 1.6
 
 # =========================
 # UTILS
@@ -105,10 +114,49 @@ def plausible_ticker(tk: str) -> bool:
         return False
     return 2 <= len(tk) <= 5
 
+def compact_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s or "").strip()
+
+def remove_urls(s: str) -> str:
+    return re.sub(r"https?://\S+|www\.\S+", "", s or "", flags=re.IGNORECASE)
+
+def condense_op_for_title(op_text: str) -> str:
+    """
+    Aggressive, cheap “condense” suitable for RSS title:
+    - strip urls
+    - compress whitespace
+    - drop common filler
+    - take first sentence-ish if available
+    - hard trim
+    """
+    s = strip_html(op_text)
+    s = remove_urls(s)
+    s = compact_ws(s)
+
+    # Drop some common boilerplate/filler that bloats titles
+    s = re.sub(r"\b(tl;?dr|tldr|anon here|listen up|serious question|quick question)\b[:\-]?\s*", "", s, flags=re.IGNORECASE)
+
+    # Prefer first sentence if it exists and is meaningful
+    parts = re.split(r"(?<=[\.\!\?])\s+", s)
+    if parts and len(parts[0]) >= MIN_OP_TITLE_CHARS:
+        s = parts[0]
+
+    s = compact_ws(s)
+
+    if len(s) > MAX_OP_TITLE_CHARS:
+        s = s[:MAX_OP_TITLE_CHARS].rstrip() + "…"
+
+    return s if s else "Untitled thread"
+
+def contains_excluded_keyword(text: str) -> bool:
+    t = (text or "").lower()
+    for kw in EXCLUDE_TITLE_KEYWORDS:
+        if kw.lower() in t:
+            return True
+    return False
 
 # =========================
-# RSS WRITER
-# (preserve input order)
+# RSS WRITER (preserve input order)
 # =========================
 
 def write_rss(title: str, link: str, desc: str, items: list, filename: str):
@@ -133,7 +181,6 @@ def write_rss(title: str, link: str, desc: str, items: list, filename: str):
 
     ET.ElementTree(rss).write(filename, encoding="utf-8", xml_declaration=True)
 
-
 # =========================
 # 4CHAN FETCH
 # =========================
@@ -151,25 +198,17 @@ def thread_velocity(thread: dict, n: int) -> float:
     hours = max((n - last) / 3600.0, 0.25)
     return replies / hours
 
-
-# =========================
-# ACTIVE FEED (UPGRADED)
-# - No "general" titles
-# - Ticker threads first
-# - Exploding detector (velocity accelerating vs last run)
-# - Context window: OP + first 3 replies + last 30 replies
-# - Replies are oldest -> newest (OP always on top)
-# =========================
-
-def thread_has_general(thread: dict) -> bool:
-    sub = (thread.get("sub") or "")
-    return "general" in sub.lower()
-
-def thread_has_ticker(thread: dict) -> bool:
-    # Use subject + catalog snippet for cheap detection
+def thread_has_ticker_hint(thread: dict) -> bool:
+    # Cheap detection for ordering only (subject + catalog snippet)
     text = (thread.get("sub") or "") + " " + (thread.get("com") or "")
     tks = [t for t in extract_tickers(text) if plausible_ticker(t)]
     return len(set(tks)) > 0
+
+# =========================
+# ACTIVE FEED (no generals, no GME/BBBYQ, context window)
+# - Titles are clean: "<subject or OP snippet> — <replies> replies — <x.x/hr>"
+# - Replies in body: OP, first 3, last 30 (oldest->newest)
+# =========================
 
 def build_thread_context_html(thread_no: int, subject: str, replies: int, last_mod: int, posts: list) -> str:
     url = f"https://boards.4chan.org/{BOARD}/thread/{thread_no}"
@@ -177,14 +216,11 @@ def build_thread_context_html(thread_no: int, subject: str, replies: int, last_m
     op = posts[0] if posts else {}
     op_text = strip_html(op.get("com", ""))
 
-    # early replies: posts[1:1+FIRST_REPLIES]
     early = posts[1:1 + FIRST_REPLIES] if len(posts) > 1 else []
-
-    # latest replies: last LAST_REPLIES excluding OP
     latest = posts[1:] if len(posts) > 1 else []
     latest = latest[-LAST_REPLIES:] if latest else []
 
-    # Avoid duplicates if thread small (early overlaps with latest)
+    # De-dupe overlap
     early_ids = {p.get("no") for p in early}
     latest = [p for p in latest if p.get("no") not in early_ids]
 
@@ -202,8 +238,7 @@ def build_thread_context_html(thread_no: int, subject: str, replies: int, last_m
     if not early:
         body.append("<p><i>No replies yet.</i></p>")
     else:
-        # Already oldest->newest by API order
-        for p in early:
+        for p in early:  # already oldest->newest
             txt = strip_html(p.get("com", ""))
             if not txt:
                 continue
@@ -213,8 +248,7 @@ def build_thread_context_html(thread_no: int, subject: str, replies: int, last_m
     if not latest:
         body.append("<p><i>No additional replies in the latest window.</i></p>")
     else:
-        # Already oldest->newest by API order for the slice
-        for p in latest:
+        for p in latest:  # slice is still oldest->newest
             txt = strip_html(p.get("com", ""))
             if not txt:
                 continue
@@ -230,61 +264,63 @@ def generate_active_feed():
     n = now_ts()
     threads = [t for page in catalog for t in page.get("threads", [])]
 
-    # Filter out GENERAL threads (display)
-    threads = [t for t in threads if not thread_has_general(t)]
+    # Compute current velocities
+    vel_now = {str(t["no"]): thread_velocity(t, n) for t in threads}
 
-    # Compute velocity now
-    vel_now = {}
-    for t in threads:
-        vel_now[str(t["no"])] = thread_velocity(t, n)
-
-    # Load previous velocities
+    # Previous velocities (for “exploding” ordering)
     vel_prev = load_json(THREAD_VEL_FILE, {})
 
     enriched = []
     for t in threads:
         no = str(t["no"])
-        v = vel_now.get(no, 0.0)
+        v = float(vel_now.get(no, 0.0))
         vp = float(vel_prev.get(no, 0.0) or 0.0)
 
-        # exploding?
         explode = False
         if (v - vp) >= EXPLODE_ABS_DELTA:
             explode = True
         if vp > 0 and v >= vp * EXPLODE_MULT:
             explode = True
 
-        has_tk = thread_has_ticker(t)
+        has_tk_hint = thread_has_ticker_hint(t)
 
-        # Sort key: ticker first, then exploding, then velocity
-        # Use booleans as ints (True=1)
-        enriched.append((int(has_tk), int(explode), v, t, vp))
+        enriched.append((int(has_tk_hint), int(explode), v, t))
 
+    # Sort: ticker-hint first, exploding next, then velocity
     enriched.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
 
     items = []
-    for has_tk_i, explode_i, v, t, vp in enriched[:ACTIVE_THREADS_LIMIT]:
-        thread_no = t["no"]
-        url = f"https://boards.4chan.org/{BOARD}/thread/{thread_no}"
-        subject = strip_html(t.get("sub")) or f"Thread {thread_no}"
-        replies = t.get("replies", 0)
-        last_mod = t.get("last_modified", t.get("time", n))
+    for has_tk_i, explode_i, v, t in enriched:
+        if len(items) >= ACTIVE_THREADS_LIMIT:
+            break
 
+        # Need thread JSON to build OP snippet + replies
+        thread_no = t["no"]
         posts = fetch_thread_posts(thread_no)
         if not posts:
             continue
 
+        # Determine subject; if missing, use condensed OP snippet
+        raw_sub = strip_html(t.get("sub")) or ""
+        op_text_raw = (posts[0].get("com") if posts and len(posts) > 0 else "") or ""
+        op_snip = condense_op_for_title(op_text_raw)
+
+        # Exclusion check must apply to subject OR OP snippet (for GME/BBBYQ etc.)
+        if contains_excluded_keyword(raw_sub) or contains_excluded_keyword(op_snip):
+            continue
+
+        subject = raw_sub if raw_sub else op_snip
+
+        replies = t.get("replies", 0)
+        last_mod = t.get("last_modified", t.get("time", n))
+        url = f"https://boards.4chan.org/{BOARD}/thread/{thread_no}"
+
         body = build_thread_context_html(thread_no, subject, replies, last_mod, posts)
 
-        tags = []
-        if has_tk_i:
-            tags.append("TICKER")
-        if explode_i:
-            tags.append(f"EXPLODING {v:.1f}/hr")
-        else:
-            tags.append(f"{v:.1f}/hr")
+        # Clean title: subject — replies — x.x/hr
+        title = f"{subject} — {replies} replies — {v:.1f}/hr"
 
-        title = f"[{' | '.join(tags)}] {subject} — {replies} replies"
+        # GUID changes when updated so Reeder refreshes
         guid = f"{url}?lm={last_mod}"
 
         items.append({
@@ -297,16 +333,15 @@ def generate_active_feed():
         })
 
     write_rss(
-        title="/biz/ Active (no generals, context, ticker-first, exploding)",
+        title="/biz/ Active (filtered, with replies)",
         link=f"https://boards.4chan.org/{BOARD}/",
-        desc=f"OP + first {FIRST_REPLIES} replies + last {LAST_REPLIES} replies. Ticker threads boosted. Exploding threads flagged.",
+        desc=f"Filtered out: {', '.join(EXCLUDE_TITLE_KEYWORDS)}. OP + first {FIRST_REPLIES} replies + last {LAST_REPLIES} replies.",
         items=items,
         filename=FEED_ACTIVE
     )
 
-    # Save velocities for next run (use full set we computed post-filter)
+    # Save velocities for next run (full catalog; harmless)
     save_json(THREAD_VEL_FILE, vel_now)
-
 
 # =========================
 # STOCK VALIDATION (FMP + Yahoo options)
@@ -346,11 +381,8 @@ def validate_stock(tk: str):
         "desc": (p.get("description") or "")[:240]
     }
 
-
 # =========================
-# MENTIONS (ALL THREADS INCLUDED)
-# (You only asked to exclude "general" from display in Active feed.
-# Mentions remain based on the full catalog.)
+# MENTIONS (full catalog; unchanged)
 # =========================
 
 def gather_mentions():
@@ -367,17 +399,15 @@ def gather_mentions():
                     counts[tk] = counts.get(tk, 0) + 1
     return counts
 
-
-# =========================
-# OPPORTUNITY FEEDS (ASYM / PRE / TOP)
-# Universe: 50M–2.5B, optionable, US exchange
-# =========================
-
 def load_mentions_history():
     return load_json(MENTION_HISTORY_FILE, {})
 
 def save_mentions_history(data):
     save_json(MENTION_HISTORY_FILE, data)
+
+# =========================
+# OPPORTUNITY FEEDS (ASYM / PRE / TOP)
+# =========================
 
 def generate_opportunity_feeds():
     curr = gather_mentions()
@@ -392,7 +422,6 @@ def generate_opportunity_feeds():
             validated[tk] = info
 
     n = now_ts()
-
     asym_rows = []
     pre_rows = []
 
@@ -401,11 +430,9 @@ def generate_opportunity_feeds():
         p = prev.get(tk, 0)
         cap = info["cap"]
 
-        # Asymmetry: attention vs size
         asym_score = m * (MAX_CAP / cap)
         asym_rows.append((asym_score, tk, info, m))
 
-        # Pre-breakout: rising mentions but not crowded
         if 2 <= m <= 15:
             delta = m - p
             if delta > 0:
@@ -415,7 +442,7 @@ def generate_opportunity_feeds():
     asym_rows.sort(reverse=True)
     pre_rows.sort(reverse=True)
 
-    # ---- Asymmetric feed
+    # Asymmetric
     asym_items = []
     for sc, tk, info, m in asym_rows[:25]:
         cap_s = fmt_money(info["cap"])
@@ -443,7 +470,7 @@ def generate_opportunity_feeds():
         filename=FEED_ASYM
     )
 
-    # ---- Pre-breakout feed
+    # Pre-breakout
     pre_items = []
     for sc, tk, info, m, d in pre_rows[:20]:
         cap_s = fmt_money(info["cap"])
@@ -471,7 +498,7 @@ def generate_opportunity_feeds():
         filename=FEED_PRE
     )
 
-    # ---- Top opportunities (merge + dedupe; ASYM first then PRE)
+    # Top opportunities (merge + dedupe; ASYM first then PRE)
     seen = set()
     merged = []
 
@@ -514,9 +541,7 @@ def generate_opportunity_feeds():
         filename=FEED_TOP
     )
 
-    # Save mention snapshot
     save_mentions_history(curr)
-
 
 # =========================
 # MAIN
